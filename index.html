@@ -254,6 +254,11 @@ input[type="file"] { display: none; }
     <input type="range" id="slider-gain" min="-20" max="20" value="0">
     <span class="val" id="val-gain">0 dB</span>
   </div>
+  <div class="slider-group">
+    <label>Deformation:</label>
+    <input type="range" id="slider-deform" min="0" max="100" value="50">
+    <span class="val" id="val-deform">0.50</span>
+  </div>
 </div>
 
 <script type="importmap">
@@ -282,6 +287,7 @@ let vizMode = 'heatmap'; // 'heatmap' or 'points'
 let timeConstantMs = 50;
 let dbRange = 30;
 let gainDb = 0;
+let deformStrength = 0.5;
 let smoothedEnergy = null;
 
 // ─── Fibonacci Sphere Points ───
@@ -392,11 +398,20 @@ for (let i = 0; i < vertexCount; i++) {
 }
 sphereGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
+// Store original sphere vertex positions for deformation
+const origSpherePositions = new Float32Array(posAttr.array.length);
+origSpherePositions.set(posAttr.array);
+
 // Wireframe overlay
 const wireGeo = new THREE.SphereGeometry(1.002, 24, 16);
 const wireMat = new THREE.MeshBasicMaterial({ color: 0x333355, wireframe: true, transparent: true, opacity: 0.15 });
 const wireMesh = new THREE.Mesh(wireGeo, wireMat);
 scene.add(wireMesh);
+
+// Store original wireframe vertex positions
+const wirePos = wireGeo.getAttribute('position');
+const origWirePositions = new Float32Array(wirePos.array.length);
+origWirePositions.set(wirePos.array);
 
 // ─── Point Cloud (points mode) ───
 const pointsGeo = new THREE.BufferGeometry();
@@ -446,7 +461,7 @@ function createLabel(text, position) {
   sprite.scale.set(0.6, 0.22, 1);
   return sprite;
 }
-const labelDist = 1.35;
+const labelDist = 2.3;
 // AmbiX: X = front (+X in 3D), Y = left (-Z in Three.js when looking from front)
 // We use: 3D X = front(AmbiX X), 3D Y = up(AmbiX Z), 3D Z = left(AmbiX Y reflected)
 // With camera at (0,0,3.5) looking at origin:
@@ -770,9 +785,73 @@ function precomputeVertexMapping() {
 }
 precomputeVertexMapping();
 
+// Precompute nearest sphere points for wireframe vertices
+const wireVertexCount = wirePos.count;
+const wireNearestPoints = [];
+function precomputeWireMapping() {
+  wireNearestPoints.length = 0;
+  for (let vi = 0; vi < wireVertexCount; vi++) {
+    const vx = origWirePositions[vi * 3];
+    const vy = origWirePositions[vi * 3 + 1];
+    const vz = origWirePositions[vi * 3 + 2];
+    // Normalize (wireframe is at r=1.002)
+    const len = Math.sqrt(vx * vx + vy * vy + vz * vz);
+    const nx = vx / len, ny = vy / len, nz = vz / len;
+    const nearby = [];
+    for (let si = 0; si < NUM_SPHERE_POINTS; si++) {
+      const dot = nx * spherePoints[si].x + ny * spherePoints[si].y + nz * spherePoints[si].z;
+      if (dot > 0.95) {
+        nearby.push({ idx: si, weight: Math.pow(dot, 32) });
+      }
+    }
+    if (nearby.length === 0) {
+      let bestDot = -2, bestIdx = 0;
+      for (let si = 0; si < NUM_SPHERE_POINTS; si++) {
+        const dot = nx * spherePoints[si].x + ny * spherePoints[si].y + nz * spherePoints[si].z;
+        if (dot > bestDot) { bestDot = dot; bestIdx = si; }
+      }
+      nearby.push({ idx: bestIdx, weight: 1 });
+    }
+    wireNearestPoints.push(nearby);
+  }
+}
+precomputeWireMapping();
+
+function deformWireframe(normalizedEnergy) {
+  if (!normalizedEnergy) return;
+  const R_min = 1.0;
+  const R_max = 2.0;
+  const deformRange = (R_max - R_min) * deformStrength;
+  const wireOverlap = 1.002; // original wireframe radius ratio
+
+  for (let vi = 0; vi < wireVertexCount; vi++) {
+    const nearby = wireNearestPoints[vi];
+    let weightedVal = 0, totalWeight = 0;
+    for (let j = 0; j < nearby.length; j++) {
+      weightedVal += normalizedEnergy[nearby[j].idx] * nearby[j].weight;
+      totalWeight += nearby[j].weight;
+    }
+    const val = totalWeight > 0 ? weightedVal / totalWeight : 0;
+    const scale = (R_min + deformRange * val) * wireOverlap;
+    const ox = origWirePositions[vi * 3];
+    const oy = origWirePositions[vi * 3 + 1];
+    const oz = origWirePositions[vi * 3 + 2];
+    // origWire is at 1.002 radius, normalize then rescale
+    const len = Math.sqrt(ox * ox + oy * oy + oz * oz);
+    wirePos.setXYZ(vi, (ox / len) * scale, (oy / len) * scale, (oz / len) * scale);
+  }
+  wirePos.needsUpdate = true;
+}
+
 function updateHeatmapColorsFast(normalizedEnergy) {
   if (!normalizedEnergy) return;
   const colorAttr = sphereGeo.getAttribute('color');
+  const posAttr2 = sphereGeo.getAttribute('position');
+
+  const R_min = 1.0;
+  const R_max = 2.0;
+  const deformRange = (R_max - R_min) * deformStrength;
+
   for (let vi = 0; vi < vertexCount; vi++) {
     const nearby = vertexNearestPoints[vi];
     let weightedVal = 0, totalWeight = 0;
@@ -783,8 +862,17 @@ function updateHeatmapColorsFast(normalizedEnergy) {
     const val = totalWeight > 0 ? weightedVal / totalWeight : 0;
     const c = energyToColor(val);
     colorAttr.setXYZ(vi, c.r, c.g, c.b);
+
+    // Deform: scale vertex outward based on energy
+    const scale = R_min + deformRange * val;
+    const ox = origSpherePositions[vi * 3];
+    const oy = origSpherePositions[vi * 3 + 1];
+    const oz = origSpherePositions[vi * 3 + 2];
+    posAttr2.setXYZ(vi, ox * scale, oy * scale, oz * scale);
   }
   colorAttr.needsUpdate = true;
+  posAttr2.needsUpdate = true;
+  sphereGeo.computeVertexNormals();
 }
 
 // ─── Animation Loop ───
@@ -814,6 +902,7 @@ function animate(timestamp) {
 
       if (vizMode === 'heatmap') {
         updateHeatmapColorsFast(normalized);
+        deformWireframe(normalized);
       } else {
         updatePointCloudColors(normalized);
       }
@@ -865,6 +954,7 @@ document.getElementById('timeline').addEventListener('input', (e) => {
       const normalized = normalizeEnergyToDb(smoothedEnergy);
       if (vizMode === 'heatmap') {
         updateHeatmapColorsFast(normalized);
+        deformWireframe(normalized);
       } else {
         updatePointCloudColors(normalized);
       }
@@ -894,6 +984,11 @@ document.getElementById('slider-db').addEventListener('input', (e) => {
 document.getElementById('slider-gain').addEventListener('input', (e) => {
   gainDb = parseInt(e.target.value);
   document.getElementById('val-gain').textContent = `${gainDb} dB`;
+});
+
+document.getElementById('slider-deform').addEventListener('input', (e) => {
+  deformStrength = parseInt(e.target.value) / 100;
+  document.getElementById('val-deform').textContent = deformStrength.toFixed(2);
 });
 
 // Keyboard shortcuts
