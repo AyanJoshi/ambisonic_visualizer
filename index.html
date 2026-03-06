@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ambisonic Energy Visualizer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  overflow: hidden;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+#canvas-container {
+  flex: 1;
+  position: relative;
+}
+canvas { display: block; }
+
+/* Top bar */
+#top-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: #16213e;
+  border-bottom: 1px solid #0f3460;
+  flex-wrap: wrap;
+}
+#top-bar h1 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #e94560;
+  white-space: nowrap;
+}
+
+/* Controls panel */
+#controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #16213e;
+  border-top: 1px solid #0f3460;
+  flex-wrap: wrap;
+}
+
+button {
+  background: #0f3460;
+  color: #e0e0e0;
+  border: 1px solid #533483;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.2s;
+}
+button:hover { background: #533483; }
+button:disabled { opacity: 0.4; cursor: default; }
+
+input[type="file"] { display: none; }
+
+#file-label {
+  background: #e94560;
+  color: white;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.2s;
+}
+#file-label:hover { background: #c73652; }
+
+#timeline-container {
+  flex: 1;
+  min-width: 200px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#timeline {
+  flex: 1;
+  height: 6px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: #0f3460;
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+}
+#timeline::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: #e94560;
+  cursor: pointer;
+}
+#time-display {
+  font-size: 12px;
+  font-family: monospace;
+  white-space: nowrap;
+  min-width: 100px;
+}
+
+/* Sliders panel */
+#sliders {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 6px 16px;
+  background: #16213e;
+  border-top: 1px solid #0f3460;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.slider-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.slider-group label { white-space: nowrap; color: #aaa; }
+.slider-group input[type="range"] {
+  width: 100px;
+  height: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: #0f3460;
+  border-radius: 2px;
+  outline: none;
+}
+.slider-group input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: #533483;
+  cursor: pointer;
+}
+.slider-group .val { min-width: 40px; text-align: right; color: #e94560; }
+
+/* Color legend */
+#color-legend {
+  position: absolute;
+  right: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 200px;
+  border-radius: 4px;
+  border: 1px solid #333;
+  pointer-events: none;
+}
+#legend-labels {
+  position: absolute;
+  right: 50px;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 200px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  font-size: 11px;
+  font-family: monospace;
+  color: #aaa;
+  pointer-events: none;
+}
+
+/* Loading overlay */
+#loading-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(26, 26, 46, 0.9);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 16px;
+  z-index: 100;
+}
+#loading-overlay.visible { display: flex; }
+#loading-text { font-size: 16px; }
+#loading-bar-bg {
+  width: 300px; height: 6px;
+  background: #0f3460;
+  border-radius: 3px;
+}
+#loading-bar {
+  height: 100%; width: 0%;
+  background: #e94560;
+  border-radius: 3px;
+  transition: width 0.2s;
+}
+
+/* Filename display */
+#file-name {
+  font-size: 12px;
+  color: #aaa;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+</style>
+</head>
+<body>
+
+<div id="top-bar">
+  <h1>Ambisonic Energy Visualizer</h1>
+  <label id="file-label" for="file-input">Load WAV File</label>
+  <input type="file" id="file-input" accept=".wav">
+  <span id="file-name"></span>
+</div>
+
+<div id="canvas-container">
+  <canvas id="three-canvas"></canvas>
+  <div id="color-legend"></div>
+  <div id="legend-labels">
+    <span id="legend-max">0 dB</span>
+    <span id="legend-mid">-15 dB</span>
+    <span id="legend-min">-30 dB</span>
+  </div>
+  <div id="loading-overlay">
+    <div id="loading-text">Loading...</div>
+    <div id="loading-bar-bg"><div id="loading-bar"></div></div>
+  </div>
+</div>
+
+<div id="controls">
+  <button id="btn-play" disabled>Play</button>
+  <button id="btn-stop" disabled>Stop</button>
+  <div id="timeline-container">
+    <input type="range" id="timeline" min="0" max="1000" value="0" disabled>
+  </div>
+  <span id="time-display">00:00.0 / 00:00.0</span>
+  <button id="btn-mode" disabled>Mode: Heatmap</button>
+</div>
+
+<div id="sliders">
+  <div class="slider-group">
+    <label>Time Constant:</label>
+    <input type="range" id="slider-tc" min="10" max="500" value="50">
+    <span class="val" id="val-tc">50ms</span>
+  </div>
+  <div class="slider-group">
+    <label>dB Range:</label>
+    <input type="range" id="slider-db" min="6" max="60" value="30">
+    <span class="val" id="val-db">30 dB</span>
+  </div>
+  <div class="slider-group">
+    <label>Gain:</label>
+    <input type="range" id="slider-gain" min="-20" max="20" value="0">
+    <span class="val" id="val-gain">0 dB</span>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ─── State ───
+let audioCtx, audioBuffer, sourceNode, startedAt = 0, pausedAt = 0;
+let isPlaying = false, duration = 0;
+let channelData = [null, null, null, null]; // W, Y, Z, X
+let sampleRate = 96000;
+
+// Visualization mode
+let vizMode = 'heatmap'; // 'heatmap' or 'points'
+
+// Parameters
+let timeConstantMs = 50;
+let dbRange = 30;
+let gainDb = 0;
+let smoothedEnergy = null;
+
+// ─── Fibonacci Sphere Points ───
+const NUM_SPHERE_POINTS = 800;
+const spherePoints = []; // {theta, phi, x, y, z}
+function generateFibonacciSphere(n) {
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < n; i++) {
+    const y = 1 - (i / (n - 1)) * 2; // -1 to 1
+    const radius = Math.sqrt(1 - y * y);
+    const angle = goldenAngle * i;
+    const x = Math.cos(angle) * radius;
+    const z = Math.sin(angle) * radius;
+    // Convert to azimuth/elevation
+    const theta = Math.atan2(-z, x); // azimuth
+    const phi = Math.asin(y);         // elevation
+    spherePoints.push({ theta, phi, x, y, z });
+  }
+}
+generateFibonacciSphere(NUM_SPHERE_POINTS);
+
+// ─── Color Mapping ───
+function energyToColor(normalizedVal) {
+  // 0 = min (cool blue), 1 = max (hot yellow/red)
+  const v = Math.max(0, Math.min(1, normalizedVal));
+  let r, g, b;
+  if (v < 0.25) {
+    const t = v / 0.25;
+    r = 0; g = t * 0.3; b = 0.3 + t * 0.5;
+  } else if (v < 0.5) {
+    const t = (v - 0.25) / 0.25;
+    r = 0; g = 0.3 + t * 0.7; b = 0.8 - t * 0.5;
+  } else if (v < 0.75) {
+    const t = (v - 0.5) / 0.25;
+    r = t; g = 1.0; b = 0.3 - t * 0.3;
+  } else {
+    const t = (v - 0.75) / 0.25;
+    r = 1.0; g = 1.0 - t * 0.6; b = 0;
+  }
+  return new THREE.Color(r, g, b);
+}
+
+function drawColorLegend() {
+  const legend = document.getElementById('color-legend');
+  const canvas = document.createElement('canvas');
+  canvas.width = 24; canvas.height = 200;
+  const ctx = canvas.getContext('2d');
+  for (let y = 0; y < 200; y++) {
+    const v = 1 - y / 199;
+    const c = energyToColor(v);
+    ctx.fillStyle = `rgb(${Math.round(c.r*255)},${Math.round(c.g*255)},${Math.round(c.b*255)})`;
+    ctx.fillRect(0, y, 24, 1);
+  }
+  legend.style.backgroundImage = `url(${canvas.toDataURL()})`;
+  legend.style.backgroundSize = 'cover';
+}
+drawColorLegend();
+
+function updateLegendLabels() {
+  document.getElementById('legend-max').textContent = '0 dB';
+  document.getElementById('legend-mid').textContent = `${(-dbRange / 2).toFixed(0)} dB`;
+  document.getElementById('legend-min').textContent = `${(-dbRange).toFixed(0)} dB`;
+}
+updateLegendLabels();
+
+// ─── Three.js Setup ───
+const container = document.getElementById('canvas-container');
+const canvas = document.getElementById('three-canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a2e);
+const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+// Default view: looking at sphere from front, LEFT on left side of screen
+camera.position.set(0, 0, 3.5);
+camera.up.set(0, 1, 0);
+
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.rotateSpeed = 0.8;
+
+// Ambient + directional light
+scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+dirLight.position.set(2, 3, 4);
+scene.add(dirLight);
+
+// ─── Sphere Mesh (heatmap mode) ───
+const sphereGeo = new THREE.SphereGeometry(1, 64, 64);
+const sphereMat = new THREE.MeshPhongMaterial({
+  vertexColors: true,
+  shininess: 20,
+  side: THREE.FrontSide
+});
+const sphereMesh = new THREE.Mesh(sphereGeo, sphereMat);
+scene.add(sphereMesh);
+
+// Initialize vertex colors
+const posAttr = sphereGeo.getAttribute('position');
+const vertexCount = posAttr.count;
+const colors = new Float32Array(vertexCount * 3);
+for (let i = 0; i < vertexCount; i++) {
+  const c = energyToColor(0);
+  colors[i * 3] = c.r;
+  colors[i * 3 + 1] = c.g;
+  colors[i * 3 + 2] = c.b;
+}
+sphereGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+// Wireframe overlay
+const wireGeo = new THREE.SphereGeometry(1.002, 24, 16);
+const wireMat = new THREE.MeshBasicMaterial({ color: 0x333355, wireframe: true, transparent: true, opacity: 0.15 });
+const wireMesh = new THREE.Mesh(wireGeo, wireMat);
+scene.add(wireMesh);
+
+// ─── Point Cloud (points mode) ───
+const pointsGeo = new THREE.BufferGeometry();
+const pointPositions = new Float32Array(NUM_SPHERE_POINTS * 3);
+const pointColors = new Float32Array(NUM_SPHERE_POINTS * 3);
+const pointSizes = new Float32Array(NUM_SPHERE_POINTS);
+for (let i = 0; i < NUM_SPHERE_POINTS; i++) {
+  const p = spherePoints[i];
+  pointPositions[i * 3] = p.x;
+  pointPositions[i * 3 + 1] = p.y;
+  pointPositions[i * 3 + 2] = p.z;
+  pointSizes[i] = 4;
+  const c = energyToColor(0);
+  pointColors[i * 3] = c.r;
+  pointColors[i * 3 + 1] = c.g;
+  pointColors[i * 3 + 2] = c.b;
+}
+pointsGeo.setAttribute('position', new THREE.BufferAttribute(pointPositions, 3));
+pointsGeo.setAttribute('color', new THREE.BufferAttribute(pointColors, 3));
+pointsGeo.setAttribute('size', new THREE.BufferAttribute(pointSizes, 1));
+
+const pointsMat = new THREE.PointsMaterial({
+  vertexColors: true,
+  size: 0.04,
+  sizeAttenuation: true
+});
+const pointCloud = new THREE.Points(pointsGeo, pointsMat);
+pointCloud.visible = false;
+scene.add(pointCloud);
+
+// ─── Direction Labels ───
+function createLabel(text, position) {
+  const canvas2 = document.createElement('canvas');
+  canvas2.width = 128; canvas2.height = 48;
+  const ctx = canvas2.getContext('2d');
+  ctx.fillStyle = 'rgba(0,0,0,0)';
+  ctx.fillRect(0, 0, 128, 48);
+  ctx.fillStyle = '#aaaacc';
+  ctx.font = 'bold 20px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, 64, 24);
+  const texture = new THREE.CanvasTexture(canvas2);
+  const spriteMat = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
+  const sprite = new THREE.Sprite(spriteMat);
+  sprite.position.copy(position);
+  sprite.scale.set(0.6, 0.22, 1);
+  return sprite;
+}
+const labelDist = 1.35;
+// AmbiX: X = front (+X in 3D), Y = left (-Z in Three.js when looking from front)
+// We use: 3D X = front(AmbiX X), 3D Y = up(AmbiX Z), 3D Z = left(AmbiX Y reflected)
+// With camera at (0,0,3.5) looking at origin:
+// Screen left = -X in 3D which should be LEFT in Ambisonic
+// Screen right = +X in 3D which should be RIGHT
+// Screen front (toward camera) = +Z which is behind us
+// So: FRONT = (0,0,-labelDist), BACK = (0,0,+labelDist), LEFT = (-labelDist,0,0), RIGHT = (+labelDist,0,0)
+scene.add(createLabel('FRONT', new THREE.Vector3(0, 0, -labelDist)));
+scene.add(createLabel('BACK', new THREE.Vector3(0, 0, labelDist)));
+scene.add(createLabel('LEFT', new THREE.Vector3(-labelDist, 0, 0)));
+scene.add(createLabel('RIGHT', new THREE.Vector3(labelDist, 0, 0)));
+scene.add(createLabel('TOP', new THREE.Vector3(0, labelDist, 0)));
+scene.add(createLabel('BOTTOM', new THREE.Vector3(0, -labelDist, 0)));
+
+// ─── Resize ───
+function onResize() {
+  const w = container.clientWidth;
+  const h = container.clientHeight;
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', onResize);
+onResize();
+
+// ─── Audio Loading ───
+async function loadAudioFile(file) {
+  const overlay = document.getElementById('loading-overlay');
+  const loadingText = document.getElementById('loading-text');
+  const loadingBar = document.getElementById('loading-bar');
+  overlay.classList.add('visible');
+  loadingText.textContent = `Reading ${file.name}...`;
+  loadingBar.style.width = '0%';
+
+  // Stop any current playback
+  stopPlayback();
+
+  try {
+    // Read file as ArrayBuffer
+    const arrayBuffer = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onprogress = (e) => {
+        if (e.lengthComputable) {
+          loadingBar.style.width = `${(e.loaded / e.total * 50).toFixed(0)}%`;
+        }
+      };
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsArrayBuffer(file);
+    });
+
+    loadingText.textContent = 'Decoding audio...';
+    loadingBar.style.width = '50%';
+
+    // Create audio context
+    if (audioCtx) audioCtx.close();
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    // Decode audio
+    audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+    if (audioBuffer.numberOfChannels < 4) {
+      alert('WAV file must have at least 4 channels (AmbiX format: W, Y, Z, X)');
+      overlay.classList.remove('visible');
+      return;
+    }
+
+    loadingText.textContent = 'Extracting channel data...';
+    loadingBar.style.width = '75%';
+
+    sampleRate = audioBuffer.sampleRate;
+    duration = audioBuffer.duration;
+
+    // Extract channel data (ACN ordering: W=0, Y=1, Z=2, X=3)
+    for (let ch = 0; ch < 4; ch++) {
+      channelData[ch] = audioBuffer.getChannelData(ch);
+    }
+
+    loadingBar.style.width = '100%';
+    loadingText.textContent = 'Ready!';
+
+    // Initialize smoothed energy
+    smoothedEnergy = new Float32Array(NUM_SPHERE_POINTS);
+
+    // Enable controls
+    document.getElementById('btn-play').disabled = false;
+    document.getElementById('btn-stop').disabled = false;
+    document.getElementById('timeline').disabled = false;
+    document.getElementById('btn-mode').disabled = false;
+    document.getElementById('file-name').textContent = file.name;
+
+    // Update timeline
+    const timeline = document.getElementById('timeline');
+    timeline.max = Math.floor(duration * 10); // 0.1s resolution
+    timeline.value = 0;
+    updateTimeDisplay(0);
+
+    setTimeout(() => overlay.classList.remove('visible'), 400);
+
+  } catch (err) {
+    console.error('Error loading audio:', err);
+    loadingText.textContent = `Error: ${err.message}`;
+    setTimeout(() => overlay.classList.remove('visible'), 3000);
+  }
+}
+
+// ─── Playback ───
+function startPlayback(offset = 0) {
+  if (!audioBuffer || !audioCtx) return;
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+
+  stopSource();
+  sourceNode = audioCtx.createBufferSource();
+  sourceNode.buffer = audioBuffer;
+  sourceNode.connect(audioCtx.destination);
+  sourceNode.onended = () => {
+    if (isPlaying) {
+      isPlaying = false;
+      pausedAt = duration;
+      document.getElementById('btn-play').textContent = 'Play';
+    }
+  };
+  startedAt = audioCtx.currentTime - offset;
+  sourceNode.start(0, offset);
+  isPlaying = true;
+  document.getElementById('btn-play').textContent = 'Pause';
+}
+
+function stopSource() {
+  if (sourceNode) {
+    try { sourceNode.stop(); } catch(e) {}
+    sourceNode.disconnect();
+    sourceNode = null;
+  }
+}
+
+function stopPlayback() {
+  stopSource();
+  isPlaying = false;
+  pausedAt = 0;
+  startedAt = 0;
+  document.getElementById('btn-play').textContent = 'Play';
+}
+
+function getCurrentTime() {
+  if (isPlaying) {
+    return Math.min(audioCtx.currentTime - startedAt, duration);
+  }
+  return pausedAt;
+}
+
+function updateTimeDisplay(t) {
+  const cur = formatTime(t);
+  const dur = formatTime(duration);
+  document.getElementById('time-display').textContent = `${cur} / ${dur}`;
+}
+
+function formatTime(s) {
+  const mins = Math.floor(s / 60);
+  const secs = (s % 60).toFixed(1);
+  return `${mins.toString().padStart(2, '0')}:${secs.padStart(4, '0')}`;
+}
+
+// ─── Energy Computation ───
+function computeEnergy(currentTime) {
+  if (!channelData[0]) return null;
+
+  const windowSamples = Math.floor(timeConstantMs / 1000 * sampleRate);
+  const centerSample = Math.floor(currentTime * sampleRate);
+  const startSample = Math.max(0, centerSample - Math.floor(windowSamples / 2));
+  const endSample = Math.min(channelData[0].length, startSample + windowSamples);
+
+  if (startSample >= channelData[0].length) return null;
+
+  const W = channelData[0];
+  const Y = channelData[1];
+  const Z = channelData[2];
+  const X = channelData[3];
+
+  const energy = new Float32Array(NUM_SPHERE_POINTS);
+  const gainLin = Math.pow(10, gainDb / 20);
+
+  // For each sphere point, compute energy
+  for (let i = 0; i < NUM_SPHERE_POINTS; i++) {
+    const { theta, phi } = spherePoints[i];
+    const sinTheta = Math.sin(theta);
+    const cosTheta = Math.cos(theta);
+    const sinPhi = Math.sin(phi);
+    const cosPhi = Math.cos(phi);
+
+    let sumSq = 0;
+    // Downsample for performance: skip samples if window is large
+    const step = windowSamples > 2000 ? Math.floor(windowSamples / 1000) : 1;
+    let count = 0;
+
+    for (let s = startSample; s < endSample; s += step) {
+      // E(θ,φ) = W + Y·sin(θ)·cos(φ) + Z·sin(φ) + X·cos(θ)·cos(φ)
+      const val = W[s] + Y[s] * sinTheta * cosPhi + Z[s] * sinPhi + X[s] * cosTheta * cosPhi;
+      sumSq += val * val;
+      count++;
+    }
+
+    energy[i] = (count > 0) ? (sumSq / count) * gainLin * gainLin : 0;
+  }
+
+  return energy;
+}
+
+function normalizeEnergyToDb(energy) {
+  if (!energy) return null;
+
+  const normalized = new Float32Array(energy.length);
+  // Find max for reference
+  let maxE = 0;
+  for (let i = 0; i < energy.length; i++) {
+    if (energy[i] > maxE) maxE = energy[i];
+  }
+  if (maxE <= 0) return normalized;
+
+  for (let i = 0; i < energy.length; i++) {
+    let db = 10 * Math.log10(Math.max(energy[i], maxE * 1e-10) / maxE);
+    // Map [-dbRange, 0] to [0, 1]
+    normalized[i] = Math.max(0, Math.min(1, (db + dbRange) / dbRange));
+  }
+  return normalized;
+}
+
+// ─── Smoothing ───
+function smoothEnergy(newEnergy, dt) {
+  if (!smoothedEnergy || !newEnergy) return newEnergy;
+  const alpha = 1 - Math.exp(-dt / (timeConstantMs / 1000));
+  for (let i = 0; i < NUM_SPHERE_POINTS; i++) {
+    smoothedEnergy[i] += alpha * (newEnergy[i] - smoothedEnergy[i]);
+  }
+  return smoothedEnergy;
+}
+
+// ─── Update Sphere Colors ───
+function updateHeatmapColors(normalizedEnergy) {
+  if (!normalizedEnergy) return;
+
+  const colorAttr = sphereGeo.getAttribute('color');
+  const posAttr2 = sphereGeo.getAttribute('position');
+
+  for (let vi = 0; vi < vertexCount; vi++) {
+    const vx = posAttr2.getX(vi);
+    const vy = posAttr2.getY(vi);
+    const vz = posAttr2.getZ(vi);
+
+    // Find nearest sphere point using dot product (approximate nearest neighbor)
+    let bestDot = -2;
+    let bestIdx = 0;
+    for (let si = 0; si < NUM_SPHERE_POINTS; si++) {
+      const dot = vx * spherePoints[si].x + vy * spherePoints[si].y + vz * spherePoints[si].z;
+      if (dot > bestDot) {
+        bestDot = dot;
+        bestIdx = si;
+      }
+    }
+
+    // Interpolate using nearby points (weighted by dot product)
+    let weightedVal = 0;
+    let totalWeight = 0;
+    for (let si = 0; si < NUM_SPHERE_POINTS; si++) {
+      const dot = vx * spherePoints[si].x + vy * spherePoints[si].y + vz * spherePoints[si].z;
+      if (dot > 0.95) { // Only consider nearby points
+        const w = Math.pow(dot, 32); // Sharp falloff
+        weightedVal += normalizedEnergy[si] * w;
+        totalWeight += w;
+      }
+    }
+    const val = totalWeight > 0 ? weightedVal / totalWeight : 0;
+    const c = energyToColor(val);
+    colorAttr.setXYZ(vi, c.r, c.g, c.b);
+  }
+  colorAttr.needsUpdate = true;
+}
+
+function updatePointCloudColors(normalizedEnergy) {
+  if (!normalizedEnergy) return;
+  const colorAttr = pointsGeo.getAttribute('color');
+  const posAttr2 = pointsGeo.getAttribute('position');
+  for (let i = 0; i < NUM_SPHERE_POINTS; i++) {
+    const val = normalizedEnergy[i];
+    const c = energyToColor(val);
+    colorAttr.setXYZ(i, c.r, c.g, c.b);
+    // Scale point distance from center based on energy
+    const dist = 0.8 + val * 0.6;
+    posAttr2.setXYZ(i, spherePoints[i].x * dist, spherePoints[i].y * dist, spherePoints[i].z * dist);
+  }
+  colorAttr.needsUpdate = true;
+  posAttr2.needsUpdate = true;
+}
+
+// ─── Precompute nearest sphere points for each vertex ───
+const vertexNearestPoints = [];
+function precomputeVertexMapping() {
+  vertexNearestPoints.length = 0;
+  for (let vi = 0; vi < vertexCount; vi++) {
+    const vx = posAttr.getX(vi);
+    const vy = posAttr.getY(vi);
+    const vz = posAttr.getZ(vi);
+    const nearby = [];
+    for (let si = 0; si < NUM_SPHERE_POINTS; si++) {
+      const dot = vx * spherePoints[si].x + vy * spherePoints[si].y + vz * spherePoints[si].z;
+      if (dot > 0.95) {
+        nearby.push({ idx: si, weight: Math.pow(dot, 32) });
+      }
+    }
+    // Fallback: if no nearby points, find the closest one
+    if (nearby.length === 0) {
+      let bestDot = -2, bestIdx = 0;
+      for (let si = 0; si < NUM_SPHERE_POINTS; si++) {
+        const dot = vx * spherePoints[si].x + vy * spherePoints[si].y + vz * spherePoints[si].z;
+        if (dot > bestDot) { bestDot = dot; bestIdx = si; }
+      }
+      nearby.push({ idx: bestIdx, weight: 1 });
+    }
+    vertexNearestPoints.push(nearby);
+  }
+}
+precomputeVertexMapping();
+
+function updateHeatmapColorsFast(normalizedEnergy) {
+  if (!normalizedEnergy) return;
+  const colorAttr = sphereGeo.getAttribute('color');
+  for (let vi = 0; vi < vertexCount; vi++) {
+    const nearby = vertexNearestPoints[vi];
+    let weightedVal = 0, totalWeight = 0;
+    for (let j = 0; j < nearby.length; j++) {
+      weightedVal += normalizedEnergy[nearby[j].idx] * nearby[j].weight;
+      totalWeight += nearby[j].weight;
+    }
+    const val = totalWeight > 0 ? weightedVal / totalWeight : 0;
+    const c = energyToColor(val);
+    colorAttr.setXYZ(vi, c.r, c.g, c.b);
+  }
+  colorAttr.needsUpdate = true;
+}
+
+// ─── Animation Loop ───
+let lastFrameTime = 0;
+function animate(timestamp) {
+  requestAnimationFrame(animate);
+  const dt = (timestamp - lastFrameTime) / 1000;
+  lastFrameTime = timestamp;
+
+  controls.update();
+
+  if (channelData[0]) {
+    const currentTime = getCurrentTime();
+
+    // Update timeline
+    if (isPlaying) {
+      const timeline = document.getElementById('timeline');
+      timeline.value = currentTime * 10;
+      updateTimeDisplay(currentTime);
+    }
+
+    // Compute and display energy
+    const rawEnergy = computeEnergy(currentTime);
+    if (rawEnergy) {
+      smoothEnergy(rawEnergy, Math.max(dt, 1/60));
+      const normalized = normalizeEnergyToDb(smoothedEnergy);
+
+      if (vizMode === 'heatmap') {
+        updateHeatmapColorsFast(normalized);
+      } else {
+        updatePointCloudColors(normalized);
+      }
+    }
+  }
+
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(animate);
+
+// ─── Event Handlers ───
+document.getElementById('file-input').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (file) loadAudioFile(file);
+});
+
+document.getElementById('btn-play').addEventListener('click', () => {
+  if (!audioBuffer) return;
+  if (isPlaying) {
+    pausedAt = getCurrentTime();
+    stopSource();
+    isPlaying = false;
+    document.getElementById('btn-play').textContent = 'Play';
+  } else {
+    startPlayback(pausedAt);
+  }
+});
+
+document.getElementById('btn-stop').addEventListener('click', () => {
+  stopPlayback();
+  const timeline = document.getElementById('timeline');
+  timeline.value = 0;
+  updateTimeDisplay(0);
+  // Reset visualization
+  if (smoothedEnergy) smoothedEnergy.fill(0);
+});
+
+document.getElementById('timeline').addEventListener('input', (e) => {
+  const t = parseFloat(e.target.value) / 10;
+  updateTimeDisplay(t);
+  if (isPlaying) {
+    startPlayback(t);
+  } else {
+    pausedAt = t;
+    // Update visualization at this point
+    const rawEnergy = computeEnergy(t);
+    if (rawEnergy && smoothedEnergy) {
+      smoothedEnergy.set(rawEnergy);
+      const normalized = normalizeEnergyToDb(smoothedEnergy);
+      if (vizMode === 'heatmap') {
+        updateHeatmapColorsFast(normalized);
+      } else {
+        updatePointCloudColors(normalized);
+      }
+    }
+  }
+});
+
+document.getElementById('btn-mode').addEventListener('click', () => {
+  vizMode = vizMode === 'heatmap' ? 'points' : 'heatmap';
+  document.getElementById('btn-mode').textContent = `Mode: ${vizMode === 'heatmap' ? 'Heatmap' : 'Points'}`;
+  sphereMesh.visible = vizMode === 'heatmap';
+  wireMesh.visible = vizMode === 'heatmap';
+  pointCloud.visible = vizMode === 'points';
+});
+
+document.getElementById('slider-tc').addEventListener('input', (e) => {
+  timeConstantMs = parseInt(e.target.value);
+  document.getElementById('val-tc').textContent = `${timeConstantMs}ms`;
+});
+
+document.getElementById('slider-db').addEventListener('input', (e) => {
+  dbRange = parseInt(e.target.value);
+  document.getElementById('val-db').textContent = `${dbRange} dB`;
+  updateLegendLabels();
+});
+
+document.getElementById('slider-gain').addEventListener('input', (e) => {
+  gainDb = parseInt(e.target.value);
+  document.getElementById('val-gain').textContent = `${gainDb} dB`;
+});
+
+// Keyboard shortcuts
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' && !e.target.matches('input')) {
+    e.preventDefault();
+    document.getElementById('btn-play').click();
+  }
+});
+</script>
+</body>
+</html>
